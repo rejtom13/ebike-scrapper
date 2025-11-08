@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  # Serwis 1: Twoja aplikacja Python (scraper)
+  app:
+    build: .
+    container_name: olx-scraper
+    # Wczytuje zmienne z pliku .env (DB_PASSWORD, DB_USER, etc.)
+    env_file: .env
+    # --- NAJWAŻNIEJSZA ZMIANA ---
+    # Użyj sieci hosta. Kontener będzie działał jak zwykła aplikacja
+    # na Twoim serwerze i będzie miał dostęp do localhost (127.0.0.1).
+    network_mode: "host"
