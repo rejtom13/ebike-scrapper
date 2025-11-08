@@ -254,7 +254,6 @@ class Database:
             cursor.close()
             conn.close()
 
-
     def get_stats(self):
         """Pobiera i wyświetla podstawowe statystyki z bazy danych."""
         conn = self.get_connection()
@@ -268,27 +267,36 @@ class Database:
             cursor.execute("SELECT COUNT(*) FROM listings")
             total = cursor.fetchone()[0]
 
-            cursor.execute("SELECT AVG(price_value) FROM listings WHERE price_value IS NOT NULL AND currency = 'PLN'")
+            cursor.execute("SELECT COUNT(*) FROM listings WHERE is_active = TRUE")
+            total_active = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM listings WHERE is_active = FALSE")
+            total_inactive = cursor.fetchone()[0]
+
+            cursor.execute(
+                "SELECT AVG(price_value) FROM listings WHERE price_value IS NOT NULL AND currency = 'PLN' AND is_active = TRUE")
             avg_price_result = cursor.fetchone()[0]
             avg_price = float(avg_price_result) if avg_price_result else None
 
-            cursor.execute("SELECT COUNT(*) FROM listings WHERE promoted = TRUE")
+            cursor.execute("SELECT COUNT(*) FROM listings WHERE promoted = TRUE AND is_active = TRUE")
             promoted = cursor.fetchone()[0]
 
-            cursor.execute("SELECT MIN(created_time), MAX(created_time) FROM listings")
+            cursor.execute("SELECT MIN(created_time), MAX(created_time) FROM listings WHERE is_active = TRUE")
             min_date, max_date = cursor.fetchone()
 
             print(f"\n{'=' * 60}")
             print("📊 STATYSTYKI BAZY DANYCH")
             print(f"{'=' * 60}")
-            print(f"   Ogłoszenia łącznie: {total}")
+            print(f"   Ogłoszenia łącznie (w bazie): {total}")
+            print(f"   Ogłoszenia AKTYWNE: {total_active}")
+            print(f"   Ogłoszenia NIEAKTYWNE: {total_inactive}")
             if avg_price:
-                print(f"   Średnia cena (PLN): {avg_price:.2f} PLN")
+                print(f"   Średnia cena (Aktywne, PLN): {avg_price:.2f} PLN")
             else:
-                print("   Średnia cena (PLN): Brak danych")
-            print(f"   Ogłoszenia promowane: {promoted}")
+                print("   Średnia cena (Aktywne, PLN): Brak danych")
+            print(f"   Promowane (Aktywne): {promoted}")
             if min_date:
-                print(f"   Zakres dat ogłoszeń: od {min_date.strftime('%Y-%m-%d')} do {max_date.strftime('%Y-%m-%d')}")
+                print(f"   Zakres dat (Aktywne): od {min_date.strftime('%Y-%m-%d')} do {max_date.strftime('%Y-%m-%d')}")
 
         except Exception as e:
             print(f"✗ Błąd podczas pobierania statystyk: {e}")
