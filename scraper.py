@@ -7,15 +7,41 @@ from collections import deque
 # Importujemy stałe i konfigurację z pliku config.py
 import config
 
+# <--- NOWY IMPORT
+from sentence_transformers import SentenceTransformer
+
+
+# --->
+
 
 class OLXGraphQLScraper:
     OLX_LIMIT = 999
+
+    # <--- NOWY MODEL
+    # Używamy tego samego modelu, co w poprzednich krokach
+    MODEL_NAME = 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+
+    # --->
 
     def __init__(self, database):
         self.api_url = config.API_URL
         self.headers = config.HEADERS
         self.graphql_query = config.GRAPHQL_QUERY
         self.db = database
+
+        # <--- NOWA SEKCJA: Ładowanie modelu AI ---
+        print(f"🤖 Ładowanie modelu wektoryzacji: {self.MODEL_NAME}...")
+        try:
+            self.model = SentenceTransformer(self.MODEL_NAME)
+            print("✓ Model AI załadowany pomyślnie.")
+        except Exception as e:
+            print(f"✗ CRITICAL: Nie udało się załadować modelu SentenceTransformer: {e}")
+            print(
+                "✗ Upewnij się, że masz zainstalowane 'sentence-transformers' i dostęp do internetu (przy pierwszym uruchomieniu).")
+            # Możemy rzucić wyjątkiem lub pozwolić kontynuować bez modelu
+            self.model = None
+            # raise e # Odkomentuj, jeśli chcesz przerwać program
+        # --->
 
     def search(self, query, offset=0, limit=40, sort_by="created_at:desc", price_from=None, price_to=None,
                category_id=None, state=None):
@@ -246,8 +272,51 @@ class OLXGraphQLScraper:
             'chat_available': contact.get('chat', False),
             'courier_available': contact.get('courier', False),
             'params': json.dumps(params_list, ensure_ascii=False) if params_list else None,
-            'scraped_at': datetime.now()
+            'scraped_at': datetime.now(),
+
+            # <--- NOWE POLE (na razie puste) ---
+            'title_vector': None
+            # --->
         }
+
+    # <--- NOWA METODA POMOCNICZA ---
+    def _add_vectors_to_listings(self, listings_list):
+        """
+        Pobiera listę słowników ogłoszeń, generuje wektory dla tytułów
+        i dodaje je do słowników pod kluczem 'title_vector'.
+        """
+        if not listings_list:
+            return []  # Zwraca pustą listę, jeśli nic nie przyszło
+
+        if not self.model:
+            print("   [OSTRZEŻENIE] Model AI nie jest załadowany. Wektoryzacja pominięta.")
+            return listings_list  # Zwraca listę bez zmian
+
+        print(f"   🤖 Generowanie wektorów dla {len(listings_list)} ogłoszeń...")
+
+        try:
+            # 1. Zbierz wszystkie tytuły (lub pusty string, jeśli tytułu brak)
+            titles = [listing.get('title', '') for listing in listings_list]
+
+            # 2. Wygeneruj wektory (embeddings) dla całej partii
+            embeddings = self.model.encode(titles, show_progress_bar=False)  # False, aby nie psuć logów
+
+            # 3. Dodaj wektory z powrotem do słowników
+            for i, listing in enumerate(listings_list):
+                # Konwertujemy na listę Pythonową, aby baza danych (pgvector)
+                # mogła to łatwo przyjąć (np. przez str(list))
+                listing['title_vector'] = embeddings[i].tolist()
+
+            print(f"   ✓ Wektory dla {len(listings_list)} ogłoszeń wygenerowane.")
+
+        except Exception as e:
+            print(f"   ✗ BŁĄD podczas generowania wektorów: {e}")
+            print("   [OSTRZEŻENIE] Zapis do bazy nastąpi bez wektorów dla tej partii.")
+            # Nie przerywamy, po prostu wektory będą 'None'
+
+        return listings_list
+
+    # --->
 
     def _scrape_batch(self, query, sort_by="created_at:desc", max_results=1000, batch_size=40, price_from=None,
                       price_to=None, category_id=None, state=None):
@@ -349,8 +418,15 @@ class OLXGraphQLScraper:
             self._print_summary(0, 0)
             return 0
 
-        print(f"\n   💾 Zapisywanie {len(listings)} pobranych ogłoszeń do bazy danych...")
-        saved_count = self.db.save_to_database(listings)
+        # <--- NOWA LINIA: Generowanie wektorów ---
+        listings_with_vectors = self._add_vectors_to_listings(listings)
+        # --->
+
+        print(f"\n   💾 Zapisywanie {len(listings_with_vectors)} pobranych ogłoszeń do bazy danych...")
+
+        # <--- ZMIANA: Przekazujemy wzbogaconą listę ---
+        saved_count = self.db.save_to_database(listings_with_vectors)
+        # --->
 
         self._print_summary(len(listings), saved_count)
         return saved_count
@@ -398,10 +474,18 @@ class OLXGraphQLScraper:
                 price_from=initial_price_from,  # <-- Filtrujemy tylko w tym zakresie
                 price_to=initial_price_to
             )
-            for listing in listings_batch:
+
+            # <--- NOWA LINIA: Generowanie wektorów ---
+            listings_with_vectors = self._add_vectors_to_listings(listings_batch)
+            # --->
+
+            for listing in listings_with_vectors:  # <-- ZMIANA: pętla po 'listings_with_vectors'
                 all_listings[listing['olx_id']] = listing
 
-            saved = self.db.save_to_database(listings_batch)
+            # <--- ZMIANA: Przekazujemy wzbogaconą listę ---
+            saved = self.db.save_to_database(listings_with_vectors)
+            # --->
+
             total_saved_count += saved
             print(f"   💾 Zapisano/Zaktualizowano: {saved} ogłoszeń")
 
@@ -470,14 +554,21 @@ class OLXGraphQLScraper:
                         state=state
                     )
 
+                    # <--- NOWA LINIA: Generowanie wektorów ---
+                    listings_with_vectors = self._add_vectors_to_listings(listings_batch)
+                    # --->
+
                     new_listings_in_batch = []
-                    for listing in listings_batch:
+                    for listing in listings_with_vectors:  # <-- ZMIANA: pętla po 'listings_with_vectors'
                         if listing['olx_id'] not in all_listings:
                             all_listings[listing['olx_id']] = listing
                             new_listings_in_batch.append(listing)
 
                     if new_listings_in_batch:
+                        # <--- ZMIANA: Przekazujemy wzbogaconą listę 'new_listings_in_batch' ---
+                        # Ta lista zawiera już wektory
                         saved = self.db.save_to_database(new_listings_in_batch)
+                        # --->
                         total_saved_count += saved
                         print(f"   💾 Dodano {len(new_listings_in_batch)} nowych ogłoszeń (Zapisano/Zakt: {saved})")
                     else:
@@ -515,14 +606,20 @@ class OLXGraphQLScraper:
                             state=state
                         )
 
+                        # <--- NOWA LINIA: Generowanie wektorów ---
+                        listings_with_vectors = self._add_vectors_to_listings(listings_batch)
+                        # --->
+
                         new_listings_in_batch = []
-                        for listing in listings_batch:
+                        for listing in listings_with_vectors:  # <-- ZMIANA: pętla po 'listings_with_vectors'
                             if listing['olx_id'] not in all_listings:
                                 all_listings[listing['olx_id']] = listing
                                 new_listings_in_batch.append(listing)
 
                         if new_listings_in_batch:
+                            # <--- ZMIANA: Przekazujemy wzbogaconą listę 'new_listings_in_batch' ---
                             saved = self.db.save_to_database(new_listings_in_batch)
+                            # --->
                             total_saved_count += saved
                             print(f"   💾 Dodano {len(new_listings_in_batch)} nowych ogłoszeń (Zapisano/Zakt: {saved})")
                         else:
